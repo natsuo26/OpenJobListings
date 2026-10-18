@@ -1,0 +1,17 @@
+# Runtime data written by jobfinder.py
+details_cache.json
+my_jobs.json
+*.tmp
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# OS / editor
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/
