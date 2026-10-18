@@ -74,6 +74,14 @@
   .langbox { border: 1px dashed var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 12px; }
   .langbox select { width: auto; }
   .tag.lang { background: var(--good-soft); color: var(--good); }
+  .tag.type { background: var(--bg); color: var(--text); border: 1px solid var(--line); }
+  .tag.exp-none { background: var(--warn-soft); color: var(--warn); font-weight: 600; }
+  .tag.exp-entry { background: var(--good-soft); color: var(--good); }
+  .tag.exp-more { background: var(--bg); color: var(--muted); border: 1px solid var(--line); }
+  .views { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+  .views button { padding: 8px 14px; font-weight: 600; border-radius: 10px; }
+  .views button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .views button small { font-weight: 400; opacity: .8; }
   .tag.lang .nospeak { color: var(--bad); font-weight: 600; }
   .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
   #stop { font-size: 13px; color: var(--muted); }
@@ -89,7 +97,7 @@
     <h1>Job Finder</h1>
     <button id="stop" title="Shuts down the Job Finder program on this computer">⏻ Stop Job Finder</button>
   </div>
-  <p class="sub">Type a country, pick the kinds of jobs you want, and press Search. You'll get the latest openings from LinkedIn plus remote jobs open to that country.</p>
+  <p class="sub">Type a country, pick the kinds of jobs you want, and press Search. You'll get the latest openings from LinkedIn, Workable, Impactpool and other free job sites.</p>
 
   <div class="card">
     <div class="grid">
@@ -119,6 +127,14 @@
           <option value="4">Deep (slower, more results)</option>
         </select>
       </div>
+      <div>
+        <label class="f" for="jobtype">Job type</label>
+        <select id="jobtype">
+          <option value="">Any (full-time &amp; part-time)</option>
+          <option value="part">Part-time only</option>
+          <option value="full">Full-time only</option>
+        </select>
+      </div>
     </div>
 
     <div style="margin-top:16px">
@@ -134,10 +150,21 @@
       <textarea id="custom" placeholder="e.g.&#10;school psychologist&#10;NGO programme officer"></textarea>
     </div>
 
+    <div style="margin-top:14px">
+      <label class="f" style="margin:0">Where to search</label>
+      <div class="cats" id="sources">
+        <label class="check"><input type="checkbox" value="li" checked><span>LinkedIn<small>Any country · the most jobs</small></span></label>
+        <label class="check"><input type="checkbox" value="wk" checked><span>Workable<small>Any country · jobs posted directly by companies</small></span></label>
+        <label class="check"><input type="checkbox" value="ip" checked><span>Impactpool<small>Any country · NGO, UN &amp; development jobs</small></span></label>
+        <label class="check"><input type="checkbox" value="nhs" checked><span>NHS Jobs<small>Only used when the country is the UK</small></span></label>
+        <label class="check"><input type="checkbox" value="ba" checked><span>Bundesagentur für Arbeit<small>Only used when the country is Germany · searched in German</small></span></label>
+        <label class="check"><input type="checkbox" value="remote" checked><span>Remote job boards<small>Remotive &amp; Jobicy · remote jobs open to your country</small></span></label>
+      </div>
+    </div>
+
     <div class="opts">
-      <label><input type="checkbox" id="remote" checked> Include remote jobs</label>
       <label><input type="checkbox" id="hidesenior" checked> Hide senior / director roles</label>
-      <label><input type="checkbox" id="entry"> Entry-level &amp; associate only (stricter)</label>
+      <label><input type="checkbox" id="entry"> Entry-level &amp; associate only (LinkedIn only, stricter)</label>
     </div>
 
     <div class="row" style="margin-top:18px">
@@ -148,9 +175,20 @@
     <div class="err" id="errors"></div>
   </div>
 
+  <div class="card" id="myCard">
+    <div class="row" style="justify-content:space-between;margin-bottom:10px">
+      <h2 style="margin:0;font-size:18px">★ My saved jobs</h2>
+      <button id="myCsv">Download CSV</button>
+    </div>
+    <div class="views" id="myTabs"></div>
+    <div id="myList"></div>
+    <div class="err" id="myErr"></div>
+  </div>
+
   <div class="card" id="resultsCard" hidden>
     <div class="toolbar">
       <input type="text" id="filter" placeholder="Filter results by word (title, company, city)...">
+      <select id="srcFilter"><option value="all">All sources</option></select>
       <select id="sort">
         <option value="date">Newest first</option>
         <option value="title">Title A–Z</option>
@@ -165,6 +203,7 @@
       </select>
       <button id="csv">Download CSV</button>
     </div>
+    <div class="views" id="views"></div>
     <div class="chips" id="chips"></div>
     <div class="langbox">
       <div class="row" style="margin-bottom:6px">
@@ -205,11 +244,14 @@ const store = {
 };
 let categories = [];
 let jobs = new Map();          // id -> job
-let marks = store.get("jf_marks", {});   // id -> "saved" | "applied" | "hidden"
+let myJobs = {};   // id -> saved job record, kept in my_jobs.json by the Job Finder program
+let marks = {};    // id -> "saved" | "applied" | "hidden" (built from myJobs)
+let myTab = "saved";
 let seen = new Set(store.get("jf_seen", []));
 let activeCat = "all";
 let speak = new Set(store.get("jf_speak", ["English"]));   // languages the user speaks
 let currentRun = 0;
+let activeView = "all", detailMsg = "", searchedType = "";
 $("langMode").value = store.get("jf_langmode", "all");
 
 function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
@@ -225,13 +267,16 @@ async function loadCategories() {
 
 function restoreForm() {
   const f = store.get("jf_form", {});
-  for (const k of ["country","city","days","pages","custom"]) if (f[k] !== undefined) $(k).value = f[k];
-  for (const k of ["remote","hidesenior","entry"]) if (f[k] !== undefined) $(k).checked = f[k];
+  for (const k of ["country","city","days","pages","jobtype","custom"]) if (f[k] !== undefined) $(k).value = f[k];
+  for (const k of ["hidesenior","entry"]) if (f[k] !== undefined) $(k).checked = f[k];
+  if (f.sources) document.querySelectorAll("#sources input").forEach(i => i.checked = f.sources.includes(i.value));
 }
+function chosenSources() { return [...document.querySelectorAll("#sources input:checked")].map(i => i.value); }
 function saveForm() {
   const f = {};
-  for (const k of ["country","city","days","pages","custom"]) f[k] = $(k).value;
-  for (const k of ["remote","hidesenior","entry"]) f[k] = $(k).checked;
+  for (const k of ["country","city","days","pages","jobtype","custom"]) f[k] = $(k).value;
+  for (const k of ["hidesenior","entry"]) f[k] = $(k).checked;
+  f.sources = chosenSources();
   store.set("jf_form", f);
   store.set("jf_cats", [...document.querySelectorAll("#cats input:checked")].map(i => i.value));
 }
@@ -248,8 +293,10 @@ async function runSearch() {
   for (const c of categories) if (chosen.has(c.id)) for (const k of c.keywords) tasks.push({ keyword: k, cat: c.name });
   for (const line of $("custom").value.split("\n")) if (line.trim()) tasks.push({ keyword: line.trim(), cat: "My extra searches" });
   if (!tasks.length) { $("errors").textContent = "Pick at least one job type or add an extra phrase."; return; }
+  if (!chosenSources().length) { $("errors").textContent = "Pick at least one place to search."; return; }
 
-  jobs = new Map(); activeCat = "all";
+  jobs = new Map(); activeCat = "all"; activeView = "all"; detailMsg = ""; $("srcFilter").value = "all";
+  searchedType = $("jobtype").value;
   const runId = ++currentRun;
   $("langStatus").textContent = "";
   const prevSeen = new Set(seen);
@@ -259,7 +306,7 @@ async function runSearch() {
   renderLinks(country);
 
   const base = { country, city: $("city").value.trim(), days: $("days").value, pages: $("pages").value,
-    remote: $("remote").checked ? 1 : 0, hidesenior: $("hidesenior").checked ? 1 : 0, entry: $("entry").checked ? 1 : 0 };
+    sources: chosenSources().join(","), jobtype: searchedType, hidesenior: $("hidesenior").checked ? 1 : 0, entry: $("entry").checked ? 1 : 0 };
   let done = 0;
   const queue = [...tasks];
   async function worker() {
@@ -276,6 +323,8 @@ async function runSearch() {
           if (existing) { existing.cats.add(t.cat); continue; }
           j.dupKey = dupKey; j.cats = new Set([t.cat]); j.isNew = !prevSeen.has(j.id);
           jobs.set(j.id, j);
+          // A job saved before details were kept (see migrateOldMarks) gets its details filled in now.
+          if (myJobs[j.id] && myJobs[j.id].title === OLD_TITLE) setMyJob(j.id, undefined, j);
         }
       } catch (e) { errors.add("Could not reach the Job Finder program. Is its window still open?"); }
       done++;
@@ -294,37 +343,80 @@ async function runSearch() {
   $("errors").textContent = errors.size ? "Some searches had problems: " + [...errors].slice(0, 4).join("; ") +
     (([...errors].some(e => e.includes("429"))) ? " (LinkedIn is limiting requests. Wait a few minutes or use Quick mode.)" : "") : "";
   render();
-  checkLanguages(runId);
+  checkDetails(runId);
 }
 
-// Reads each job's description in the background to find which languages it needs.
-async function checkLanguages(runId) {
-  const todo = [...jobs.values()].filter(j => !j.langs && j.source === "LinkedIn");
+// Reads each LinkedIn / Impactpool ad in the background to find its languages,
+// job type and experience. (Other sources include this in their search results.)
+async function checkDetails(runId) {
+  const todo = [...jobs.values()].filter(j => !j.langs && /^(li|ip)-/.test(j.id));
   const queue = [...todo], errs = new Set();
   let done = 0;
   async function worker() {
     while (queue.length && runId === currentRun) {
       const batch = queue.splice(0, 5);
       try {
-        const qs = encodeURIComponent(JSON.stringify(batch.map(j => [j.id, j.title])));
-        const res = await (await fetch("/api/languages?jobs=" + qs)).json();
+        const qs = encodeURIComponent(JSON.stringify(batch.map(j => [j.id, j.title, j.hint || ""])));
+        const res = await (await fetch("/api/details?jobs=" + qs)).json();
         for (const j of batch) {
           const r = res[j.id];
-          if (r && !r.error) { j.langs = r.langs; j.bonus = r.bonus || []; j.posting = r.posting; }
+          if (r && !r.error) {
+            Object.assign(j, { langs: r.langs, bonus: r.bonus || [], posting: r.posting,
+                               types: r.types || [], exp: r.exp || "", years: r.years });
+            // saved before its ad was read? store the new details with it too
+            if (myJobs[j.id] && !myJobs[j.id].types) setMyJob(j.id, undefined, j);
+          }
           else { j.langErr = true; if (r?.error) errs.add(r.error); }
         }
       } catch { batch.forEach(j => j.langErr = true); errs.add("could not reach Job Finder"); }
       if (runId !== currentRun) return;
       done += batch.length;
-      $("langStatus").textContent = `Checking language requirements… ${done}/${todo.length}`;
+      detailMsg = `Reading job ads for language, job type & experience… ${done}/${todo.length}`;
+      $("langStatus").textContent = detailMsg;
       render();
     }
   }
   await Promise.all([worker(), worker()]);
   if (runId !== currentRun) return;
   const failed = [...jobs.values()].filter(j => j.langErr).length;
-  $("langStatus").textContent = todo.length ? `Language check done` + (failed ? ` (${failed} jobs couldn't be checked` + ([...errs].some(e => e.includes("429")) ? " because LinkedIn was busy. Searching again will retry them.)" : `: ${[...errs][0]})`) : ".") : "";
+  detailMsg = failed ? `${failed} job ads couldn't be read` + ([...errs].some(e => e.includes("429")) ? " because LinkedIn was busy. Searching again will retry them." : `: ${[...errs][0]}`) : "";
+  $("langStatus").textContent = todo.length ? (failed ? detailMsg : "Language check done.") : "";
   render();
+}
+
+// Job type chosen in the search form: hide jobs we now know don't match it.
+function typePasses(j) {
+  if (!j.types) return true;   // not read yet
+  if (searchedType === "part") return j.types.includes("Part-time");
+  if (searchedType === "full") return !j.types.includes("Part-time") || j.types.includes("Full-time");
+  return true;
+}
+
+// Quick sections shown above the results.
+const VIEWS = [
+  ["all", "All jobs", () => true],
+  ["none", "🎓 No experience needed", j => j.exp === "none"],
+  ["entry", "🌱 Entry level (0–1 yr)", j => j.exp === "none" || j.exp === "entry"],
+  ["part", "⏱ Part-time", j => (j.types || []).includes("Part-time")],
+];
+function renderViews(pool) {
+  $("views").innerHTML = VIEWS.map(([id, label, test]) =>
+    `<button class="${activeView === id ? "on" : ""}" data-view="${id}">${label} <small>(${pool.filter(test).length})</small></button>`).join("") +
+    (detailMsg ? `<span class="muted" style="font-size:13px;align-self:center">${esc(detailMsg)}</span>` : "");
+}
+$("views").onclick = e => { const b = e.target.closest("[data-view]"); if (b) { activeView = b.dataset.view; render(); } };
+
+function typeTags(j) {
+  let out = (j.types || []).map(t => `<span class="tag type">${t === "Part-time" ? "⏱ " : ""}${esc(t)}</span>`).join("");
+  if (j.exp === "none") out += '<span class="tag exp-none">🎓 No experience needed</span>';
+  else if (j.exp === "entry") out += `<span class="tag exp-entry">🌱 Entry level${j.years === 1 ? " · 1 yr" : ""}</span>`;
+  else if (j.exp === "mid") out += '<span class="tag exp-more">2 yrs experience</span>';
+  else if (j.exp === "experienced") out += `<span class="tag exp-more">${j.years ? j.years + "+ yrs" : "3+ yrs"} experience</span>`;
+  return out;
+}
+function expLabel(j) {
+  return { none: "No experience needed", entry: "Entry level (0-1 yr)", mid: "2 years",
+           experienced: (j.years || 3) + "+ years" }[j.exp] || (j.types ? "not stated" : "not checked");
 }
 
 function langPasses(j) {
@@ -379,9 +471,10 @@ function ago(d) {
   return days <= 0 ? "today" : days === 1 ? "yesterday" : `${days} days ago`;
 }
 
-function visibleJobs() {
+function visibleJobs(ignoreView = false) {
   const q = $("filter").value.trim().toLowerCase();
   const show = $("show").value;
+  const src = $("srcFilter").value;
   let list = [...jobs.values()].filter(j => {
     const m = marks[j.id];
     if (show === "active" && m === "hidden") return false;
@@ -389,7 +482,10 @@ function visibleJobs() {
     if (show === "applied" && m !== "applied") return false;
     if (show === "new" && !j.isNew) return false;
     if (activeCat !== "all" && !j.cats.has(activeCat)) return false;
+    if (src !== "all" && j.source !== src) return false;
     if (!langPasses(j)) return false;
+    if (!typePasses(j)) return false;
+    if (!ignoreView && !VIEWS.find(v => v[0] === activeView)[2](j)) return false;
     if (q && !(j.title + " " + j.company + " " + j.location).toLowerCase().includes(q)) return false;
     return true;
   });
@@ -401,12 +497,18 @@ function visibleJobs() {
 
 function render() {
   const counts = {};
-  for (const j of jobs.values()) for (const c of j.cats) counts[c] = (counts[c] || 0) + 1;
-  $("chips").innerHTML = [`<button class="chip ${activeCat === "all" ? "on" : ""}" data-cat="all">All (${jobs.size})</button>`]
+  const pool = [...jobs.values()].filter(typePasses);   // jobs matching the Job type chosen in the search
+  const typeHidden = jobs.size - pool.length;
+  for (const j of pool) for (const c of j.cats) counts[c] = (counts[c] || 0) + 1;
+  $("chips").innerHTML = [`<button class="chip ${activeCat === "all" ? "on" : ""}" data-cat="all">All (${pool.length})</button>`]
     .concat(Object.entries(counts).map(([c, n]) => `<button class="chip ${activeCat === c ? "on" : ""}" data-cat="${esc(c)}">${esc(c)} (${n})</button>`)).join("");
   renderLangChips();
+  renderSourceFilter();
+  renderViews(visibleJobs(true));
   const list = visibleJobs();
-  $("count").textContent = `Showing ${list.length} of ${jobs.size} jobs`;
+  $("count").textContent = `Showing ${list.length} of ${pool.length} jobs` +
+    (typeHidden ? ` · ${typeHidden} hidden because their ads say they aren't ${searchedType === "part" ? "part-time" : "full-time"}` : "") +
+    (activeView === "none" || activeView === "entry" ? " · only counts ads that say so; many ads don't mention experience" : "");
   $("list").innerHTML = list.length ? list.slice(0, 600).map(j => {
     const m = marks[j.id];
     return `<div class="job ${m === "hidden" ? "dim" : ""}">
@@ -417,6 +519,7 @@ function render() {
           ${j.isNew ? '<span class="tag new">NEW</span>' : ""}
           ${m === "applied" ? '<span class="tag applied">Applied</span>' : ""}
           <span class="tag src">${esc(j.source)}</span>
+          ${typeTags(j)}
           ${langTag(j)}
           ${[...j.cats].map(c => `<span class="tag">${esc(c)}</span>`).join("")}
         </div>
@@ -434,14 +537,149 @@ $("chips").onclick = e => { const b = e.target.closest("[data-cat]"); if (b) { a
 $("list").onclick = e => {
   const b = e.target.closest("[data-mark]"); if (!b) return;
   const { id, mark } = b.dataset;
-  if (marks[id] === mark) delete marks[id]; else marks[id] = mark;
-  store.set("jf_marks", marks); render();
+  setMyJob(id, marks[id] === mark ? null : mark, jobs.get(id));
 };
-["filter","sort","show"].forEach(id => $(id).addEventListener("input", render));
+
+// ---------------------------------------------------------------- my saved jobs (stored in my_jobs.json)
+
+const OLD_TITLE = "Saved job (open the link to see details)";
+
+function jobPayload(j) {
+  if (!j) return undefined;
+  const p = {};
+  for (const k of ["title","company","location","posted","url","source","langs","bonus","posting","types","exp","years"])
+    if (j[k] !== undefined) p[k] = j[k];
+  if (j.cats) p.cats = [...j.cats];
+  return p;
+}
+
+// status: "saved" | "applied" | "hidden", null to forget the job, undefined to leave as is.
+async function setMyJob(id, status, job, note) {
+  const before = myJobs[id] ? { ...myJobs[id] } : undefined;
+  const body = { id };
+  if (status !== undefined) body.status = status;
+  if (job) body.job = jobPayload(job);
+  if (note !== undefined) body.note = note;
+  // update the page straight away, then save to the file
+  if (status === null) delete myJobs[id];
+  else myJobs[id] = { ...(myJobs[id] || {}), ...(body.job || {}), ...(status ? { status } : {}), ...(note !== undefined ? { note } : {}) };
+  rebuildMarks();
+  try {
+    const res = await (await fetch("/api/myjobs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) })).json();
+    if (!res.ok) throw new Error(res.error);
+    if (res.job) myJobs[id] = res.job;
+    $("myErr").textContent = "";
+  } catch (e) {
+    if (before) myJobs[id] = before; else delete myJobs[id];
+    $("myErr").textContent = "Couldn't save that change. Is the Job Finder window still open?";
+  }
+  rebuildMarks();
+}
+
+function rebuildMarks() {
+  marks = {};
+  for (const [id, r] of Object.entries(myJobs)) if (r.status) marks[id] = r.status;
+  render(); renderMyJobs();
+}
+
+async function loadMyJobs() {
+  try { myJobs = await (await fetch("/api/myjobs")).json(); }
+  catch { $("myErr").textContent = "Couldn't load your saved jobs. Is the Job Finder window still open?"; }
+  await migrateOldMarks();
+  rebuildMarks();
+}
+
+// Earlier versions kept Save / Applied / Not for me only in this browser, without job details.
+// Move those into my_jobs.json once; details are filled in when the job shows up in a search again.
+async function migrateOldMarks() {
+  const old = store.get("jf_marks", null);
+  if (!old) return;
+  const guessUrl = id => id.startsWith("li-") ? "https://www.linkedin.com/jobs/view/" + id.slice(3)
+    : id.startsWith("ip-") ? "https://www.impactpool.org/jobs/" + id.slice(3)
+    : id.startsWith("ba-") ? "https://www.arbeitsagentur.de/jobsuche/jobdetail/" + id.slice(3) : "";
+  for (const [id, status] of Object.entries(old))
+    if (!myJobs[id]) await setMyJob(id, status, { title: OLD_TITLE, url: guessUrl(id), source: "" });
+  try { localStorage.removeItem("jf_marks"); } catch {}
+}
+
+const MY_TABS = [["saved", "★ Saved"], ["applied", "✓ Applied"], ["hidden", "✕ Not for me"]];
+function fmtDate(d) { return d ? new Date(d + "T00:00:00").toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : ""; }
+
+function renderMyJobs() {
+  const all = Object.entries(myJobs);
+  $("myTabs").innerHTML = MY_TABS.map(([s, label]) =>
+    `<button class="${myTab === s ? "on" : ""}" data-mytab="${s}">${label} <small>(${all.filter(([, r]) => r.status === s).length})</small></button>`).join("");
+  const list = all.filter(([, r]) => r.status === myTab)
+    .sort((a, b) => (b[1][myTab + "_on"] || "").localeCompare(a[1][myTab + "_on"] || ""));
+  if (!list.length) {
+    $("myList").innerHTML = `<div class="empty" style="padding:14px">${myTab === "saved"
+      ? "Click <b>★ Save</b> on any job in your search results to keep it here. Saved jobs are stored in <b>my_jobs.json</b> and stay after you close the tool or clear your browser."
+      : myTab === "applied" ? "Jobs you mark as applied will appear here." : "Jobs you mark “Not for me” will appear here, so you can undo it."}</div>`;
+    return;
+  }
+  $("myList").innerHTML = list.map(([id, r]) => {
+    const dates = [r.saved_on && "Saved " + fmtDate(r.saved_on), r.applied_on && "Applied " + fmtDate(r.applied_on),
+                   r.status === "hidden" && r.hidden_on && "Dismissed " + fmtDate(r.hidden_on)].filter(Boolean).join(" · ");
+    const buttons = r.status === "saved"
+      ? `<button data-myid="${esc(id)}" data-set="applied">✓ Mark applied</button><button data-myid="${esc(id)}" data-set="remove">Remove</button>`
+      : r.status === "applied"
+      ? `<button data-myid="${esc(id)}" data-set="saved">Back to saved</button><button data-myid="${esc(id)}" data-set="remove">Remove</button>`
+      : `<button data-myid="${esc(id)}" data-set="remove">Undo “Not for me”</button>`;
+    return `<div class="job">
+      <div style="flex:1;min-width:0">
+        <h3>${r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title || "Untitled job")}</a>` : esc(r.title || "Untitled job")}</h3>
+        <div class="meta">${[r.company, r.location, r.source].filter(Boolean).map(esc).join(" · ")}</div>
+        <div class="meta" style="font-size:13px">${dates}</div>
+        ${r.status !== "hidden" ? `<div class="tags">${typeTags(r)}</div>
+        <textarea class="note" data-noteid="${esc(id)}" placeholder="Notes: deadline, contact person, interview date…" style="margin-top:8px;min-height:38px">${esc(r.note || "")}</textarea>` : ""}
+      </div>
+      <div class="actions">${buttons}</div>
+    </div>`;
+  }).join("");
+}
+
+$("myTabs").onclick = e => { const b = e.target.closest("[data-mytab]"); if (b) { myTab = b.dataset.mytab; renderMyJobs(); } };
+$("myList").onclick = e => {
+  const b = e.target.closest("[data-set]"); if (!b) return;
+  const id = b.dataset.myid, r = myJobs[id];
+  if (b.dataset.set === "remove") {
+    if (r?.note && !confirm("Remove this job and its notes from your saved jobs?")) return;
+    setMyJob(id, null);
+  } else setMyJob(id, b.dataset.set);
+};
+// Notes are saved when you click away from the box.
+$("myList").addEventListener("change", e => {
+  const t = e.target.closest("[data-noteid]");
+  if (t) setMyJob(t.dataset.noteid, undefined, undefined, t.value);
+});
+
+$("myCsv").onclick = () => {
+  const label = { saved: "Saved", applied: "Applied", hidden: "Not for me" };
+  const rows = [["Status","Title","Company","Location","Source","Job type","Experience","Saved on","Applied on","Notes","Link"]];
+  for (const r of Object.values(myJobs)) if (r.status !== "hidden")
+    rows.push([label[r.status], r.title, r.company, r.location, r.source, (r.types || []).join("; "), expLabel(r),
+               r.saved_on, r.applied_on, r.note, r.url]);
+  const csv = rows.map(r => r.map(v => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\r\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob(["﻿" + csv], { type: "text/csv" }));
+  a.download = `my-saved-jobs-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+};
+["filter","sort","show","srcFilter"].forEach(id => $(id).addEventListener("input", render));
+
+function renderSourceFilter() {
+  const counts = {};
+  for (const j of jobs.values()) counts[j.source] = (counts[j.source] || 0) + 1;
+  const cur = $("srcFilter").value;
+  $("srcFilter").innerHTML = `<option value="all">All sources (${jobs.size})</option>` +
+    Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([s, n]) => `<option value="${esc(s)}">${esc(s)} (${n})</option>`).join("");
+  $("srcFilter").value = counts[cur] ? cur : "all";
+}
 
 $("csv").onclick = () => {
-  const rows = [["Title","Company","Location","Posted","Source","Categories","Languages needed","Languages nice to have","Status","Link"]];
+  const rows = [["Title","Company","Location","Posted","Source","Categories","Job type","Experience","Languages needed","Languages nice to have","Status","Link"]];
   for (const j of visibleJobs()) rows.push([j.title, j.company, j.location, j.posted, j.source, [...j.cats].join("; "),
+    j.types ? (j.types.join("; ") || "not stated") : "not checked", expLabel(j),
     j.langs ? (j.langs.join("; ") || "not stated") : "not checked", (j.bonus || []).join("; "), marks[j.id] || "", j.url]);
   const csv = rows.map(r => r.map(v => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\r\n");
   const a = document.createElement("a");
@@ -478,6 +716,7 @@ function renderLinks(country) {
 }
 
 loadCategories().then(restoreForm);
+loadMyJobs();
 </script>
 </body>
 </html>
