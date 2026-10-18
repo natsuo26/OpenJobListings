@@ -6,6 +6,9 @@ Then a browser tab opens at http://localhost:8765
 Uses only the Python standard library. Sources:
   * LinkedIn public job search (works for any country, no login needed)
   * Remotive (remote jobs, filtered to ones open to your country)
+
+Language requirements are worked out from each job's description and
+cached in language_cache.json so repeat searches are fast.
 """
 
 import html
@@ -117,6 +120,163 @@ def parse_linkedin(body):
     return jobs
 
 
+# ---------------------------------------------------------------- languages
+
+# Canonical language name -> regex of ways it is written (English + local names).
+LANGUAGES = {
+    "English": r"english|englisch\w*|anglais|ingl[eé]s|inglese|engels|engelsk|angielski",
+    "German": r"german|deutsch(?!land)\w*|allemand|alem[aá]n|tedesco|duits",
+    "French": r"french|französisch\w*|fran[cç]ais[e]?|franc[eé]s|francese|frans",
+    "Spanish": r"spanish|spanisch\w*|espa[nñ]ol|espagnol|spagnolo|spaans",
+    "Portuguese": r"portuguese|portugiesisch\w*|portugu[eê]s|portoghese",
+    "Italian": r"italian|italienisch\w*|italiano|italien",
+    "Dutch": r"dutch|niederländisch\w*|nederlands|néerlandais|flemish|vlaams",
+    "Arabic": r"arabic|arabisch\w*|arabe|árabe|عربي|العربية",
+    "Hindi": r"hindi",
+    "Urdu": r"urdu",
+    "Bengali": r"bengali|bangla",
+    "Tamil": r"tamil",
+    "Telugu": r"telugu",
+    "Kannada": r"kannada",
+    "Malayalam": r"malayalam",
+    "Marathi": r"marathi",
+    "Gujarati": r"gujarati",
+    "Punjabi": r"punjabi",
+    "Odia": r"odia|oriya",
+    "Mandarin / Chinese": r"mandarin|chinese|chinesisch\w*|putonghua",
+    "Cantonese": r"cantonese",
+    "Japanese": r"japanese|japanisch\w*",
+    "Korean": r"korean",
+    "Russian": r"russian|russisch\w*",
+    "Ukrainian": r"ukrainian",
+    "Polish": r"polish|polnisch\w*|polski",
+    "Turkish": r"turkish|türkisch\w*",
+    "Greek": r"greek",
+    "Hebrew": r"hebrew",
+    "Persian / Farsi": r"farsi|persian|dari",
+    "Swedish": r"swedish|svenska",
+    "Norwegian": r"norwegian|norsk",
+    "Danish": r"danish|dansk",
+    "Finnish": r"finnish|suomi",
+    "Swahili": r"swahili|kiswahili",
+    "Amharic": r"amharic",
+    "Malay": r"malay|bahasa melayu",
+    "Indonesian": r"indonesian|bahasa indonesia",
+    "Tagalog / Filipino": r"tagalog|filipino",
+    "Thai": r"\bthai\b",
+    "Vietnamese": r"vietnamese",
+    "Sinhala": r"sinhala|sinhalese",
+    "Nepali": r"nepali",
+    "Sign language": r"sign language|\bbsl\b|\basl\b|\bisl\b|gebärdensprache",
+}
+LANG_RE = {k: re.compile(r"(?<!\w)(?:" + v + r")(?!\w)", re.I) for k, v in LANGUAGES.items()}
+
+# A language name only counts if its sentence talks about language ability.
+LANG_CUE = re.compile(
+    r"fluen|proficien|speak|spoken|written|verbal|native|bilingual|multilingual|language|"
+    r"command of|knowledge of|mother tongue|communicat|"
+    r"sprach|kenntnis|fließend|verhandlungssicher|muttersprach|"
+    r"langue|maîtrise|courant|idioma|dominio|lingua|taal",
+    re.I,
+)
+
+# ...and is only "nice to have" if the sentence says so.
+LANG_OPTIONAL = re.compile(
+    r"\bplus\b|advantage|preferred|preferable|desirable|beneficial|bonus|nice to have|"
+    r"vorteil|wünschenswert|erwünscht|atout|souhait|valorar|deseable",
+    re.I,
+)
+
+# Common words used to guess which language an ad is written in.
+STOPWORDS = {
+    "English": "the and of to with for you we are is our will in this",
+    "German": "und der die das mit für wir sie ist ein eine zu bei auf ihre",
+    "French": "le les et des pour avec vous nous est une du dans sur votre",
+    "Spanish": "el los las y para con una que del por nuestro tu se como",
+    "Portuguese": "os e para com uma que não você em do da nosso são",
+    "Dutch": "het een en van voor met wij je ons zijn bij naar",
+    "Italian": "il di e per con che una del della sono nostro gli",
+}
+STOPWORDS = {k: set(v.split()) for k, v in STOPWORDS.items()}
+SCRIPTS = {
+    "Arabic": r"[؀-ۿ]", "Hindi": r"[ऀ-ॿ]", "Mandarin / Chinese": r"[一-鿿]",
+    "Japanese": r"[぀-ヿ]", "Korean": r"[가-힯]", "Thai": r"[฀-๿]",
+    "Russian": r"[Ѐ-ӿ]", "Greek": r"[Ͱ-Ͽ]", "Hebrew": r"[֐-׿]",
+}
+
+
+def posting_language(text):
+    letters = len(re.findall(r"\w", text)) or 1
+    for lang, pat in SCRIPTS.items():
+        if len(re.findall(pat, text)) / letters > 0.3:
+            return lang
+    words = re.findall(r"[a-zà-ÿ]+", text.lower())
+    if len(words) < 15:
+        return ""
+    scores = {k: sum(w in sw for w in words) for k, sw in STOPWORDS.items()}
+    best = max(scores, key=scores.get)
+    return best if scores[best] >= 5 else ""
+
+
+def detect_languages(title, description):
+    """Languages a job needs (the ad's own language plus any it asks for),
+    and languages it only lists as a bonus."""
+    posting = posting_language(description)
+    needed = {posting} if posting else set()
+    bonus = set()
+    for sentence in re.split(r"[.;:!?•\n\r]+|\s[-–]\s", title + ".\n" + description):
+        if LANG_CUE.search(sentence):
+            found = {k for k, rx in LANG_RE.items() if rx.search(sentence)}
+            (bonus if LANG_OPTIONAL.search(sentence) else needed).update(found)
+    return {"langs": sorted(needed), "bonus": sorted(bonus - needed), "posting": posting}
+
+
+LI_JOB = "https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/"
+CACHE_FILE = HERE / "language_cache.json"
+_cache_lock = threading.Lock()
+try:
+    _lang_cache = json.loads(CACHE_FILE.read_text(encoding="utf-8"))
+except Exception:
+    _lang_cache = {}
+
+
+def linkedin_languages(job_id, title):
+    if job_id in _lang_cache:
+        return _lang_cache[job_id]
+    num = job_id.removeprefix("li-")
+    for attempt in range(3):
+        try:
+            with _li_lock:
+                page = fetch(LI_JOB + num)
+            break
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < 2:
+                time.sleep(2 + attempt * 3)
+                continue
+            return {"error": f"LinkedIn HTTP {e.code}"}
+        except Exception as e:
+            return {"error": str(e)}
+    m = re.search(r"show-more-less-html__markup[^>]*>(.*?)</div>", page, re.S)
+    result = detect_languages(title, clean(m.group(1)) if m else "")
+    with _cache_lock:
+        _lang_cache[job_id] = result
+    return result
+
+
+def languages_for(qs):
+    jobs = json.loads(qs.get("jobs", ["[]"])[0])  # [[id, title], ...]
+    out = {}
+    for job_id, title in jobs[:10]:
+        if job_id.startswith("li-"):
+            out[job_id] = linkedin_languages(job_id, title)
+    with _cache_lock:
+        try:
+            CACHE_FILE.write_text(json.dumps(_lang_cache), encoding="utf-8")
+        except OSError:
+            pass
+    return out
+
+
 # ---------------------------------------------------------------- Remotive
 
 _remotive_cache = {"at": 0, "jobs": []}
@@ -161,6 +321,7 @@ def remotive_search(keyword, country, days):
                 "posted": posted,
                 "url": j.get("url", ""),
                 "source": "Remotive",
+                **detect_languages(j.get("title", ""), clean(j.get("description"))),
             }
         )
     return out, []
@@ -215,10 +376,20 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(200, (HERE / "categories.json").read_bytes(), "application/json")
             elif parsed.path == "/api/search":
                 self.send(200, json.dumps(search(qs)), "application/json")
+            elif parsed.path == "/api/languages":
+                self.send(200, json.dumps(languages_for(qs)), "application/json")
             else:
                 self.send(404, "Not found", "text/plain")
         except Exception as e:
             self.send(500, json.dumps({"jobs": [], "errors": [str(e)]}), "application/json")
+
+    def do_POST(self):
+        if self.path == "/api/shutdown":
+            self.send(200, "Job Finder stopped.", "text/plain")
+            print("Stopped from the web page.")
+            threading.Thread(target=self.server.shutdown, daemon=True).start()
+        else:
+            self.send(404, "Not found", "text/plain")
 
 
 def main():
@@ -230,7 +401,8 @@ def main():
         return
     url = f"http://localhost:{PORT}"
     print(f"Job Finder is running at {url}")
-    print("Keep this window open while you search. Press Ctrl+C to stop.")
+    print("Keep this window open while you search.")
+    print("To stop: click 'Stop Job Finder' on the page, close this window, or press Ctrl+C.")
     if "--no-browser" not in sys.argv:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
     try:
