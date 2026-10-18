@@ -1,0 +1,65 @@
+{
+  "_help": "Edit this file to change what gets searched. Each category has a name and a list of search phrases. Restart the tool after editing.",
+  "categories": [
+    {
+      "id": "psych_edu",
+      "name": "Psychology education, curriculum & research",
+      "keywords": [
+        "psychology lecturer",
+        "psychology teacher",
+        "academic coordinator",
+        "curriculum developer",
+        "instructional designer",
+        "psychology research"
+      ]
+    },
+    {
+      "id": "research",
+      "name": "Research / project assistant & behavioural science",
+      "keywords": [
+        "research assistant psychology",
+        "research associate",
+        "project assistant",
+        "behavioural science",
+        "behavioral research",
+        "research coordinator"
+      ]
+    },
+    {
+      "id": "mental_health",
+      "name": "Mental health, psychosocial support & student wellbeing",
+      "keywords": [
+        "psychosocial support",
+        "mental health",
+        "student wellbeing",
+        "counsellor",
+        "student counselor",
+        "wellbeing officer"
+      ]
+    },
+    {
+      "id": "hr_ld",
+      "name": "HR, L&D, employee wellbeing & programme coordination",
+      "keywords": [
+        "HR executive",
+        "learning and development",
+        "training coordinator",
+        "employee wellbeing",
+        "programme coordinator",
+        "program coordinator"
+      ]
+    },
+    {
+      "id": "transferable",
+      "name": "Other entry-level roles (transferable skills)",
+      "keywords": [
+        "program associate",
+        "talent acquisition associate",
+        "user researcher",
+        "community outreach coordinator",
+        "monitoring and evaluation",
+        "content writer psychology"
+      ]
+    }
+  ]
+}
